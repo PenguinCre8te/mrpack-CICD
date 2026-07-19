@@ -3,11 +3,11 @@ name: Build and Deploy Modpack
 on:
   push:
     tags:
-      - '*' # Triggers on tags
-  workflow_dispatch: # Allows manual trigger from the Actions tab
+      - 'v*'
+  workflow_dispatch:
 
 permissions:
-  contents: write # Required to upload assets to GitHub releases
+  contents: write
 
 jobs:
   build:
@@ -24,20 +24,28 @@ jobs:
       - name: Install packwiz
         run: go install github.com/packwiz/packwiz@latest
 
+      - name: Compile Mod List from ./mods
+        run: |
+          echo "### 🛠️ Included Mods:" > modlist.txt
+          
+          # Check if the mods directory exists and has files
+          if [ -d "./mods" ]; then
+            # Grab lines starting with 'name =', strip quotes/whitespace, and prepend a bullet point
+            grep -h "^name =" ./mods/*.toml 2>/dev/null | sed -E 's/name[[:space:]]*=[[:space:]]*"(.*)"/\1/' | sed 's/^/* /' >> modlist.txt
+          else
+            echo "* No mods found in ./mods folder" >> modlist.txt
+          fi
+
       - name: Export Modpack to .mrpack
         run: |
-          # packwiz modrinth export generates the .mrpack file
           packwiz modrinth export
-          
-          # Find the generated file name dynamic fallback
           MRP_FILE=$(ls *.mrpack | head -n 1)
           echo "PACK_FILE=$MRP_FILE" >> $GITHUB_ENV
-          echo "Found generated pack file: $MRP_FILE"
 
       - name: Upload Artifact (GitHub Actions)
         uses: actions/upload-artifact@v4
         with:
-          name: modpack-mrpack
+          name: modpack-build
           path: ${{ env.PACK_FILE }}
 
       - name: Create GitHub Release and Attach Pack
@@ -45,20 +53,30 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ env.PACK_FILE }}
+          body_path: modlist.txt
           draft: false
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Read Mod List for Discord
+        run: |
+          echo "MODS_MD<<EOF" >> $GITHUB_ENV
+          cat modlist.txt | head -n 25
+          echo "EOF" >> $GITHUB_ENV
+
       - name: Send Notification to Discord
         uses: sarisia/actions-status-discord@v1
-        if: always() # Runs even if previous steps failed to report exact status
+        if: always()
         with:
           webhook: ${{ secrets.DISCORD_WEBHOOK }}
           status: ${{ job.status }}
-          title: "Modpack Build: ${{ env.PACK_FILE }}"
+          title: "🚀 Modpack Update Build Successful"
           description: |
-            **Triggered By:** `${{ github.actor }}` via `${{ github.event_name }}`
-            **Version/Ref:** `${{ github.ref_name }}`
+            **Build File:** `${{ env.PACK_FILE }}`
+            **Triggered By:** `${{ github.actor }}`
             
-            ${{ github.init == 'refs/tags/' && '📦 The new `.mrpack` has been compiled and pinned directly to the GitHub Tag Release!' || '🛠️ Manual build completed successfully. Check GitHub Actions artifacts to download.' }}
+            ${{ env.MODS_MD }}
+            *(Showing top 25 mods. Check release for full breakdown)*
+            
+            ${{ github.ref_type == 'tag' && '📦 Grab it on the GitHub Releases tab!' || '🛠️ Dev/Manual build complete. Grab via Action Artifacts.' }}
