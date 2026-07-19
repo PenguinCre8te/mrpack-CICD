@@ -1,0 +1,64 @@
+name: Build and Deploy Modpack
+
+on:
+  push:
+    tags:
+      - '*' # Triggers on tags
+  workflow_dispatch: # Allows manual trigger from the Actions tab
+
+permissions:
+  contents: write # Required to upload assets to GitHub releases
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install packwiz
+        run: go install github.com/packwiz/packwiz@latest
+
+      - name: Export Modpack to .mrpack
+        run: |
+          # packwiz modrinth export generates the .mrpack file
+          packwiz modrinth export
+          
+          # Find the generated file name dynamic fallback
+          MRP_FILE=$(ls *.mrpack | head -n 1)
+          echo "PACK_FILE=$MRP_FILE" >> $GITHUB_ENV
+          echo "Found generated pack file: $MRP_FILE"
+
+      - name: Upload Artifact (GitHub Actions)
+        uses: actions/upload-artifact@v4
+        with:
+          name: modpack-mrpack
+          path: ${{ env.PACK_FILE }}
+
+      - name: Create GitHub Release and Attach Pack
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.PACK_FILE }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Send Notification to Discord
+        uses: sarisia/actions-status-discord@v1
+        if: always() # Runs even if previous steps failed to report exact status
+        with:
+          webhook: ${{ secrets.DISCORD_WEBHOOK }}
+          status: ${{ job.status }}
+          title: "Modpack Build: ${{ env.PACK_FILE }}"
+          description: |
+            **Triggered By:** `${{ github.actor }}` via `${{ github.event_name }}`
+            **Version/Ref:** `${{ github.ref_name }}`
+            
+            ${{ github.init == 'refs/tags/' && '📦 The new `.mrpack` has been compiled and pinned directly to the GitHub Tag Release!' || '🛠️ Manual build completed successfully. Check GitHub Actions artifacts to download.' }}
